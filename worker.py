@@ -1,4 +1,4 @@
-# worker.py - job processor for QueueCTL (captures stdout/stderr)
+# worker.py - job processor for QueueCTL (timeout, priority, scheduled jobs)
 import subprocess
 import time
 import multiprocessing
@@ -31,11 +31,12 @@ def process_job(job_id: str):
     if not job:
         return
 
-    print(f"> Processing {job['id']} (cmd: {job['command']})")
+    cmd = job["command"]
+    job_timeout = job["timeout"] if job["timeout"] is not None else None
+    print(f"> Processing {job['id']} (priority={job['priority']} timeout={job_timeout}) cmd: {cmd}")
     try:
-        result = subprocess.run(
-            job["command"], shell=True, capture_output=True, text=True
-        )
+        # run command with optional timeout
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=job_timeout)
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
         if result.returncode == 0:
@@ -44,6 +45,15 @@ def process_job(job_id: str):
         else:
             print(f"[FAIL] {job['id']} (exit={result.returncode})")
             handle_retry(job, err or out)
+    except subprocess.TimeoutExpired as te:
+        out = (getattr(te, "output", "") or "")
+        err = (getattr(te, "stderr", "") or "")
+        err_msg = f"timeout after {job_timeout}s"
+        print(f"[TIMEOUT] {job['id']} -> {err_msg}")
+        # treat timeout like failure and retry/move to DLQ
+        handle_retry(job, err_msg)
+        # save stdout/stderr if any
+        update_job_state(job["id"], last_stdout=(out.strip() if out else None), last_stderr=(err.strip() if err else None))
     except Exception as e:
         print(f"[EXC] {job['id']} -> {e}")
         handle_retry(job, str(e))
@@ -71,7 +81,7 @@ def handle_retry(job, err_msg):
     )
 
 
-def worker_loop(poll_interval: float = 2.0):
+def worker_loop(poll_interval: float = 1.0):
     print("Worker started. Press Ctrl+C to stop.")
     while not shutdown_flag.is_set():
         now_ts = int(time.time())
@@ -80,7 +90,8 @@ def worker_loop(poll_interval: float = 2.0):
             time.sleep(poll_interval)
             continue
         process_job(job_id)
-        time.sleep(0.5)
+        # brief pause to avoid tight-looping
+        time.sleep(0.2)
 
 
 def start_workers(count: int = 1, foreground: bool = False):

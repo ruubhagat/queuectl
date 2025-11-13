@@ -2,19 +2,55 @@
 import click
 import json
 import time
-from db import init_db, save_job, list_jobs, get_config, set_config, get_job, update_job_state
+import os
+from datetime import datetime, timezone
+from db import init_db, save_job, list_jobs, get_config, set_config, get_job, update_job_state, stats_summary
+
+init_db()  # ensure DB exists when the module is imported
+
+
+def parse_iso_to_epoch(s: str) -> int:
+    """
+    Parse ISO 8601 string to epoch seconds (UTC). Accepts '2025-11-10T12:00:00Z' or '2025-11-10 12:00:00'
+    """
+    if not s:
+        return 0
+    try:
+        # Try parsing with timezone Z
+        if s.endswith("Z"):
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        # fallback: try common formats
+        try:
+            dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+            dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except Exception:
+            raise click.BadParameter("Invalid run_at datetime. Use ISO format, e.g. 2025-11-12T15:30:00Z")
+
 
 @click.group()
 def cli():
     """QueueCTL - Background Job Queue System"""
-    init_db()
+    pass
 
 
 @cli.command()
 @click.option("--file", "file_path", type=click.Path(), help="Path to a JSON file containing the job")
+@click.option("--priority", type=int, default=0, help="Job priority (higher processed first)")
+@click.option("--timeout", type=int, default=None, help="Job timeout in seconds (optional)")
+@click.option("--run-at", "run_at", type=str, default=None, help="Schedule job at ISO time (UTC), e.g. 2025-11-12T15:30:00Z")
 @click.argument("job_json", required=False)
-def enqueue(file_path, job_json):
-    """Add a new job to the queue. Provide JSON string or use --file <path>."""
+def enqueue(file_path, priority, timeout, run_at, job_json):
+    """
+    Add a new job to the queue. Provide JSON string or use --file <path>.
+    Extra CLI options can set priority, timeout, and scheduled run time.
+    """
     try:
         if file_path:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -23,15 +59,31 @@ def enqueue(file_path, job_json):
             if not job_json:
                 raise click.UsageError("Either provide job JSON or use --file <path>")
             job = json.loads(job_json)
-
         if "id" not in job or "command" not in job:
-            raise ValueError("Job must include 'id' and 'command'")
+            raise click.BadParameter("Job must include 'id' and 'command'")
 
+        # CLI flags override JSON fields if provided
+        if priority is not None:
+            job["priority"] = priority
+        if timeout is not None:
+            job["timeout"] = timeout
+        if run_at:
+            job["next_run_at"] = parse_iso_to_epoch(run_at)
+        else:
+            # if job JSON has run_at (string), convert it
+            if "run_at" in job and job.get("run_at"):
+                job["next_run_at"] = parse_iso_to_epoch(job["run_at"])
+
+        # default max_retries
         if "max_retries" not in job:
             job["max_retries"] = int(get_config("default_max_retries") or 3)
 
+        # set priority default
+        if "priority" not in job:
+            job["priority"] = 0
+
         save_job(job)
-        click.echo(f"Job '{job['id']}' enqueued.")
+        click.echo(f"Job '{job['id']}' enqueued. priority={job.get('priority')} run_at={job.get('next_run_at',0)} timeout={job.get('timeout')}")
     except Exception as e:
         click.echo(f"Error: {e}")
 
@@ -46,11 +98,32 @@ def list_jobs_cmd(state, verbose):
         click.echo("No jobs found.")
         return
     for r in rows:
-        line = f"{r['id']} | {r['state']} | attempts={r['attempts']} | cmd={r['command']}"
+        line = f"{r['id']} | {r['state']} | attempts={r['attempts']} | priority={r['priority']} | cmd={r['command']}"
         click.echo(line)
         if verbose:
             click.echo(f"  stdout: {r['last_stdout']}")
             click.echo(f"  stderr: {r['last_stderr']}")
+            click.echo(f"  next_run_at: {r['next_run_at']}")
+
+
+@cli.command()
+def status():
+    """Show summary of job states and basic metrics"""
+    summary = stats_summary()
+    click.echo("=== Queue Summary ===")
+    for state, count in summary.items():
+        if state == "total":
+            click.echo(f"Total jobs: {count}")
+        else:
+            click.echo(f"{state}: {count}")
+    # simple extra metrics
+    # avg attempts
+    rows = list_jobs()
+    if rows:
+        avg_attempts = sum([r["attempts"] for r in rows]) / len(rows)
+    else:
+        avg_attempts = 0
+    click.echo(f"Avg attempts per job: {avg_attempts:.2f}")
 
 
 @cli.group()
@@ -103,7 +176,7 @@ def dlq_list():
         click.echo("No dead jobs.")
         return
     for r in rows:
-        click.echo(f"{r['id']} | {r['state']} | attempts={r['attempts']} | cmd={r['command']}")
+        click.echo(f"{r['id']} | {r['state']} | attempts={r['attempts']} | priority={r['priority']} | cmd={r['command']}")
 
 
 @dlq.command("retry")

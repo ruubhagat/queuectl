@@ -1,0 +1,360 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>QueueCTL Dashboard (Live)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    :root{
+      --muted:#6b7280; --accent:#0b5fff; --danger:#e04545; --ok:#2f9e44; --border:#e6e6e6; --card:#fff;
+    }
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; margin:18px; background:#f7f8fb}
+    h1{font-size:28px;margin-bottom:10px}
+    .wrap{display:flex; gap:18px}
+    .left{width:260px}
+    .card{background:var(--card); border:1px solid var(--border); padding:12px; border-radius:8px}
+    .jobs{flex:1}
+    .controls{display:flex; gap:8px; margin-bottom:10px; align-items:center}
+    input[type=search]{padding:8px 10px; border-radius:6px; border:1px solid var(--border); width:320px}
+    select, button{padding:7px 10px;border-radius:6px;border:1px solid var(--border); background:#fff}
+    table{width:100%; border-collapse:collapse; margin-top:6px; background:#fff}
+    th,td{padding:8px 10px; border-bottom:1px solid #f1f1f1; font-size:13px; text-align:left; vertical-align:top}
+    th{background:#fafafa; font-weight:600; color:#111}
+    pre{background:#f6f7f8; padding:6px; border-radius:6px; margin:0; max-width:300px; overflow:auto}
+    .muted{color:var(--muted); font-size:13px}
+    .small{font-size:12px;color:var(--muted)}
+    .btn-danger{border-color:var(--danger); color:var(--danger); background:#fff}
+    .btn-ok{border-color:var(--ok); color:var(--ok); background:#fff}
+    .pager{display:flex; gap:8px; align-items:center; margin-top:10px}
+    .modal{position:fixed; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; z-index:50}
+    .modal .box{width:90%; max-width:980px; background:white; border-radius:8px; padding:14px; max-height:85vh; overflow:auto}
+    .close{float:right; cursor:pointer; padding:4px; font-size:18px}
+    .events{margin-top:8px; border-top:1px dashed #eee; padding-top:8px}
+    .event{padding:6px 8px; border-radius:6px; background:#fafafa; margin-bottom:6px}
+    .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    .status-dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }
+    .status-pending { background:#f59e0b } .status-completed { background:#10b981 } .status-dead { background:#ef4444 }
+  </style>
+</head>
+<body>
+  <h1>QueueCTL Dashboard</h1>
+
+  <div class="wrap">
+    <div class="left">
+      <div class="card">
+        <div style="font-weight:600;margin-bottom:8px">Metrics</div>
+        <div id="metrics" class="small muted">Loading...</div>
+        <div style="height:8px"></div>
+        <div class="small muted">Connection: <span id="conn">—</span></div>
+        <div style="height:10px"></div>
+        <div style="font-weight:600;margin-bottom:6px">Quick Actions</div>
+        <div><button id="refreshBtn">Refresh Now</button></div>
+        <div style="height:6px"></div>
+        <div class="small muted" id="hint">Double-click a row to view details & event history.</div>
+      </div>
+    </div>
+
+    <div class="jobs">
+      <div class="card">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search ID or command..." />
+          <select id="filter">
+            <option value="">All states</option>
+            <option value="pending">pending</option>
+            <option value="processing">processing</option>
+            <option value="completed">completed</option>
+            <option value="dead">dead</option>
+          </select>
+          <button id="clear">Clear</button>
+          <div style="margin-left:auto" class="small muted">Live updates via WebSocket</div>
+        </div>
+
+        <table id="jobs-table" aria-describedby="jobs">
+          <thead>
+            <tr>
+              <th data-sort="id">ID</th>
+              <th data-sort="state">State</th>
+              <th data-sort="attempts">Attempts</th>
+              <th data-sort="priority">Priority</th>
+              <th>Command</th>
+              <th>stdout</th>
+              <th>stderr</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <div class="pager">
+          <div id="page-info" class="small muted"></div>
+          <div style="margin-left:auto">
+            <button id="prev">Prev</button>
+            <button id="next">Next</button>
+            <select id="perpage"><option>5</option><option>10</option><option selected>20</option></select>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="modal" style="display:none">
+    <div class="box">
+      <div><span class="close" id="close">✕</span><strong id="m-title"></strong></div>
+      <div style="display:flex; gap:12px; margin-top:8px">
+        <div style="flex:1">
+          <div class="small muted">Command</div>
+          <pre id="m-cmd"></pre>
+          <div class="small muted">Next run at</div>
+          <div id="m-next" class="small"></div>
+        </div>
+        <div style="flex:1">
+          <div class="small muted">stdout</div>
+          <pre id="m-out"></pre>
+          <div class="small muted">stderr</div>
+          <pre id="m-err"></pre>
+        </div>
+      </div>
+
+      <div class="events">
+        <div style="font-weight:600;margin-bottom:6px">Event history</div>
+        <div id="events-list" class=""></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* Configure token behavior based on server-side template var */
+const TOKEN_ENABLED = {{ 'true' if token_enabled else 'false' }};  // injected by Jinja
+let DASH_TOKEN = null;         // filled by prompt if TOKEN_ENABLED true
+let ws = null;
+let connected = false;
+const clientsock = {connected:false};
+
+let snapshotJobs = []; // latest jobs snapshot (array of jobs)
+let jobs = [];
+let sortKey = "id";
+let sortDir = 1; // 1 asc, -1 desc
+let page = 1;
+let perPage = parseInt(document.getElementById("perpage").value, 10);
+
+const tbody = document.querySelector("#jobs-table tbody");
+const metricsEl = document.getElementById("metrics");
+const connEl = document.getElementById("conn");
+const refreshBtn = document.getElementById("refreshBtn");
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+function promptForToken(){
+  if(!TOKEN_ENABLED) return;
+  let t = sessionStorage.getItem("queuectl_dash_token");
+  if(t){
+    DASH_TOKEN = t;
+    return;
+  }
+  t = prompt("Dashboard token is required. Paste token (will be stored in sessionStorage for this tab):");
+  if(t){
+    DASH_TOKEN = t;
+    sessionStorage.setItem("queuectl_dash_token", t);
+  }
+}
+
+// Build WebSocket URL optionally with token query param
+function wsUrlWithToken(){
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const base = proto + "//" + location.host + "/ws";
+  if(TOKEN_ENABLED){
+    if(!DASH_TOKEN) return base;
+    return base + "?token=" + encodeURIComponent(DASH_TOKEN);
+  }
+  return base;
+}
+
+function connectWS(){
+  promptForToken();
+  const url = wsUrlWithToken();
+  ws = new WebSocket(url);
+  connEl.innerText = "connecting...";
+  ws.onopen = ()=>{ connEl.innerText="connected"; clientsock.connected=true; };
+  ws.onclose = ()=>{ connEl.innerText="disconnected — reconnecting..."; clientsock.connected=false; setTimeout(connectWS, 1000); };
+  ws.onerror = (e)=>{ console.warn("ws error", e); ws.close(); };
+  ws.onmessage = (ev)=>{ try{ handleMsg(JSON.parse(ev.data)); }catch(e){ console.error(e); } };
+}
+
+function handleMsg(msg){
+  if(msg.type === "snapshot"){
+    snapshotJobs = msg.jobs || [];
+    renderMetrics(msg.status || {});
+    applyFiltersAndRender();
+  }
+}
+
+function renderMetrics(s){
+  metricsEl.innerText = `completed: ${s.completed||0} • dead: ${s.dead||0} • total: ${s.total||0} • avg_attempts: ${s.avg_attempts||0}`;
+}
+
+function applyFiltersAndRender(){
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const state = document.getElementById("filter").value;
+  jobs = snapshotJobs.filter(j=>{
+    if(state && j.state !== state) return false;
+    if(!q) return true;
+    return (j.id && j.id.toLowerCase().includes(q)) || (j.command && j.command.toLowerCase().includes(q));
+  });
+  // sort
+  jobs.sort((a,b)=>{
+    let va = a[sortKey], vb = b[sortKey];
+    if(va==null) va = ""; if(vb==null) vb="";
+    if(typeof va === "number" && typeof vb === "number") return (va - vb) * sortDir;
+    return String(va).localeCompare(String(vb)) * sortDir;
+  });
+  page = Math.max(1, Math.min(page, Math.ceil(jobs.length / perPage) || 1));
+  renderTable();
+}
+
+function renderTable(){
+  tbody.innerHTML = "";
+  const start = (page-1)*perPage;
+  const end = start + perPage;
+  const pageItems = jobs.slice(start, end);
+  for(const j of pageItems){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${esc(j.id)}</td>
+      <td>${statusBadge(j.state)}</td>
+      <td>${j.attempts}/${j.max_retries}</td>
+      <td>${j.priority}</td>
+      <td><pre>${esc(j.command)}</pre></td>
+      <td><pre>${esc(j.last_stdout||"")}</pre></td>
+      <td><pre>${esc(j.last_stderr||"")}</pre></td>
+      <td></td>
+    `;
+    const actionCell = tr.querySelector("td:last-child");
+    if(j.state === "dead"){
+      const btn = document.createElement("button");
+      btn.className = "btn-danger";
+      btn.innerText = "Retry";
+      btn.onclick = async ()=>{
+        btn.disabled = true; btn.innerText = "Retrying...";
+        // WS preferred
+        if(ws && ws.readyState === WebSocket.OPEN){
+          try{
+            ws.send(JSON.stringify({type:"retry", job_id:j.id}));
+            btn.innerText = "Requeued";
+            setTimeout(()=>{ btn.disabled=false; }, 800);
+          } catch(e){ await fallbackRetry(btn, j.id); }
+        } else {
+          await fallbackRetry(btn, j.id);
+        }
+      };
+      actionCell.appendChild(btn);
+    } else {
+      const btn = document.createElement("button");
+      btn.innerText = "Details";
+      btn.onclick = ()=>openModal(j);
+      actionCell.appendChild(btn);
+    }
+    tr.addEventListener("dblclick", ()=>openModal(j));
+    tbody.appendChild(tr);
+  }
+  document.getElementById("page-info").innerText = `showing ${Math.min(jobs.length, end)} of ${jobs.length} (page ${page})`;
+}
+
+async function fallbackRetry(btn, jobId){
+  try{
+    const fd = new FormData();
+    fd.append("job_id", jobId);
+    const headers = {};
+    if(DASH_TOKEN) headers['X-Api-Key'] = DASH_TOKEN;
+    const res = await fetch("/api/dlq/retry", {method:"POST", body:fd, headers});
+    if(res.ok){ btn.innerText = "Requeued"; setTimeout(()=>btn.disabled=false,700); }
+    else { const j = await res.json(); alert("Error: "+(j.detail||"failed")); btn.disabled=false; btn.innerText="Retry"; }
+  } catch(e){
+    alert("Network error: "+e.message); btn.disabled=false; btn.innerText="Retry";
+  }
+}
+
+function statusBadge(state){
+  const map = { pending:`<span class="status-dot status-pending"></span> ${esc(state)}`, completed:`<span class="status-dot status-completed"></span> ${esc(state)}`, dead:`<span class="status-dot status-dead"></span> ${esc(state)}` };
+  return map[state] || esc(state);
+}
+
+function esc(s){ if(!s) return ""; return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[m])); }
+
+function openModal(j){
+  document.getElementById("modal").style.display = "flex";
+  document.getElementById("m-title").innerText = j.id + " — " + j.state;
+  document.getElementById("m-cmd").innerText = j.command;
+  document.getElementById("m-next").innerText = j.next_run_at ? new Date(j.next_run_at*1000).toLocaleString() : "now";
+  document.getElementById("m-out").innerText = j.last_stdout || "";
+  document.getElementById("m-err").innerText = j.last_stderr || "";
+  loadEvents(j.id);
+}
+
+async function loadEvents(jobId){
+  const el = document.getElementById("events-list");
+  el.innerHTML = "Loading events...";
+  try{
+    const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+    if(!res.ok){ el.innerHTML = "No events."; return; }
+    const arr = await res.json();
+    if(!arr || arr.length===0){ el.innerHTML = "<div class='small muted'>No events found.</div>"; return; }
+    el.innerHTML = "";
+    for(const e of arr){
+      const div = document.createElement("div");
+      div.className = "event";
+      div.innerHTML = `<div style="font-weight:600">${esc(e.event_type)}</div><div class="small muted">${esc(e.created_at)}</div><div style="margin-top:6px">${esc(e.message||"")}</div>`;
+      el.appendChild(div);
+    }
+  } catch(err){
+    el.innerHTML = "<div class='small muted'>Failed to load events.</div>";
+  }
+}
+
+document.getElementById("close").onclick = ()=>{ document.getElementById("modal").style.display="none"; };
+
+document.getElementById("search").addEventListener("input", ()=>{ page=1; applyFiltersAndRender(); });
+document.getElementById("filter").addEventListener("change", ()=>{ page=1; applyFiltersAndRender(); });
+document.getElementById("clear").addEventListener("click", ()=>{ document.getElementById("search").value=""; document.getElementById("filter").value=""; page=1; applyFiltersAndRender(); });
+document.getElementById("prev").addEventListener("click", ()=>{ if(page>1){ page--; renderTable(); }});
+document.getElementById("next").addEventListener("click", ()=>{ if(page*perPage < jobs.length){ page++; renderTable(); }});
+document.getElementById("perpage").addEventListener("change", (e)=>{ perPage=parseInt(e.target.value,10); page=1; applyFiltersAndRender(); });
+
+document.querySelectorAll("th[data-sort]").forEach(th=>{
+  th.style.cursor="pointer";
+  th.title="Click to sort";
+  th.addEventListener("click", ()=>{
+    const key = th.getAttribute("data-sort");
+    if(sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = 1; }
+    applyFiltersAndRender();
+  });
+});
+
+document.getElementById("refreshBtn").addEventListener("click", ()=>{ if(ws && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:"ping"})); /* server ignores ping but broadcaster will send soon */ });
+
+/* Kick off websocket */
+connectWS();
+
+/* helper to reconnect more gracefully if token changes */
+function connectWS(){
+  try{
+    if(TOKEN_ENABLED && !DASH_TOKEN){
+      promptForToken();
+      // if user canceled, continue without token (server will reject ws if token required)
+    }
+    const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + (TOKEN_ENABLED && DASH_TOKEN ? "?token=" + encodeURIComponent(DASH_TOKEN) : "");
+    ws = new WebSocket(url);
+    connEl.innerText = "connecting...";
+    ws.onopen = ()=>{ connEl.innerText="connected"; clientsock.connected=true; };
+    ws.onclose = ()=>{ connEl.innerText="disconnected — reconnecting..."; clientsock.connected=false; setTimeout(connectWS, 1000); };
+    ws.onerror = (e)=>{ console.warn("ws error", e); ws.close(); };
+    ws.onmessage = (ev)=>{ try{ handleMsg(JSON.parse(ev.data)); }catch(e){ console.error(e); } };
+  } catch(e){
+    console.error("ws connect failed", e);
+    setTimeout(connectWS, 1500);
+  }
+}
+
+</script>
+</body>
+</html>
