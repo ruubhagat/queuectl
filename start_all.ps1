@@ -29,10 +29,10 @@ Set-Location -LiteralPath "__PROJECT__"
 try {
   . "__VENV__"
 } catch {
-  Write-Host "⚠️ Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
+  Write-Host "Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
 }
 $Host.UI.RawUI.WindowTitle = "QueueCTL Worker"
-Write-Host "🚀 Starting worker (foreground)..." -ForegroundColor Green
+Write-Host " Starting worker (foreground)..." -ForegroundColor Green
 python queuectl.py worker start --foreground
 Write-Host "Worker process ended. Press Enter to close." -ForegroundColor Gray
 Read-Host
@@ -43,10 +43,10 @@ Set-Location -LiteralPath "__PROJECT__"
 try {
   . "__VENV__"
 } catch {
-  Write-Host "⚠️ Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
+  Write-Host "Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
 }
 $Host.UI.RawUI.WindowTitle = "QueueCTL Dashboard"
-Write-Host "🌐 Starting dashboard (uvicorn) on http://127.0.0.1:8000 ..." -ForegroundColor Cyan
+Write-Host "Starting dashboard (uvicorn) on http://127.0.0.1:8000 ..." -ForegroundColor Cyan
 python -m uvicorn webapp:app --reload --port 8000
 Write-Host "Dashboard stopped. Press Enter to close." -ForegroundColor Gray
 Read-Host
@@ -57,10 +57,10 @@ Set-Location -LiteralPath "__PROJECT__"
 try {
   . "__VENV__"
 } catch {
-  Write-Host "⚠️ Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
+  Write-Host "Failed to activate venv:" ($Error[0].Exception.Message) -ForegroundColor Red
 }
 $Host.UI.RawUI.WindowTitle = "QueueCTL CLI"
-Write-Host "💡 CLI ready. Example commands:" -ForegroundColor Yellow
+Write-Host "CLI ready. Example commands:" -ForegroundColor Yellow
 Write-Host "  python queuectl.py list --verbose" -ForegroundColor Yellow
 Write-Host "  python queuectl.py enqueue --file job3.json" -ForegroundColor Yellow
 # spawn an interactive shell that stays open
@@ -86,6 +86,6 @@ Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-File", $work
 Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-File", $dashboardFile
 Start-Process -FilePath "powershell.exe" -ArgumentList "-NoExit", "-File", $cliFile
 
-Write-Host "✅ Launched Worker, Dashboard and CLI windows." -ForegroundColor Green
+Write-Host "Launched Worker, Dashboard and CLI windows." -ForegroundColor Green
 Write-Host "If 'Failed to activate venv' appears in any window, run this in THIS shell once:" -ForegroundColor Yellow
 Write-Host "  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass" -ForegroundColor Cyan
