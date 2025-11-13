@@ -16,7 +16,7 @@ This project demonstrates backend fundamentals such as concurrency, subprocess m
 
 ---
 
-## 🏗️ Architecture Overview
+## **🏗️ Architecture Overview**
 
 
 # **Features**
