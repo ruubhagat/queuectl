@@ -20,6 +20,11 @@ This project demonstrates backend fundamentals such as concurrency, subprocess m
 
 <img width="1053" height="741" alt="Architecture" src="https://github.com/user-attachments/assets/398d245d-d284-4482-965a-c1890a3049cd" />
 
+# 🎥 **Demo Video**
+
+```
+📼 Demo Video: <>
+```
 
 # **Features**
 
@@ -252,12 +257,6 @@ python queuectl.py enqueue --file job_fail.json
 ```
 
 ---
-
-# 🎥 **Demo Video**
-
-```
-📼 Demo Video: <>
-```
 
 # 📎 **Future Extensions**
 
